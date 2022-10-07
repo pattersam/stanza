@@ -32,7 +32,7 @@ def write_list(out_filename, dataset):
         fout.write("[\n")
         for idx, line in enumerate(formatted_dataset):
             fout.write("  ")
-            json.dump(line, fout, ensure_ascii=False)
+            json.dump(line, fout, ensure_ascii=False, default=str)
             if idx < len(formatted_dataset) - 1:
                 fout.write(",")
             fout.write("\n")
