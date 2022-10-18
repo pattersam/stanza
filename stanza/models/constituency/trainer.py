@@ -79,6 +79,14 @@ class Trainer:
         logger.info("Model saved to %s", filename)
 
     @staticmethod
+    def secondary_args(args):
+        return {
+            'wordvec_pretrain_file': args.get('wordvec_pretrain_file', None),
+            'charlm_forward_file': args["charlm_forward_file"],
+            'charlm_backward_file': args["charlm_backward_file"],
+        }
+
+    @staticmethod
     def model_from_params(params, args, foundation_cache=None):
         """
         Build a new model just from the saved params and some extra args
@@ -106,6 +114,14 @@ class Trainer:
             bert_model, bert_tokenizer = load_bert(saved_args.get('bert_model', None), foundation_cache)
             forward_charlm = load_charlm(saved_args["charlm_forward_file"], foundation_cache)
             backward_charlm = load_charlm(saved_args["charlm_backward_file"], foundation_cache)
+            # TODO: can remove once the models are rebuilt
+            if 'secondary_parser' not in params:
+                params['secondary_parser'] = None
+
+            secondary_parser = None
+            if params['secondary_parser'] is not None:
+                secondary_parser = Trainer.model_from_params(params['secondary_parser'], Trainer.secondary_args(args), foundation_cache)
+
             model = LSTMModel(pretrain=pt,
                               forward_charlm=forward_charlm,
                               backward_charlm=backward_charlm,
@@ -119,6 +135,7 @@ class Trainer:
                               root_labels=params['root_labels'],
                               constituent_opens=params['constituent_opens'],
                               unary_limit=params['unary_limit'],
+                              secondary_parser=secondary_parser,
                               args=saved_args)
         else:
             raise ValueError("Unknown model type {}".format(model_type))
@@ -477,7 +494,7 @@ def build_trainer(args, train_trees, dev_trees, silver_trees, foundation_cache, 
         # using the model's current values works for if the new
         # dataset is the same or smaller
         # TODO: handle a larger dataset as well
-        model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, trainer.model.transitions, trainer.model.constituents, trainer.model.tags, trainer.model.delta_words, trainer.model.rare_words, trainer.model.root_labels, trainer.model.constituent_opens, trainer.model.unary_limit(), args)
+        model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, trainer.model.transitions, trainer.model.constituents, trainer.model.tags, trainer.model.delta_words, trainer.model.rare_words, trainer.model.root_labels, trainer.model.constituent_opens, trainer.model.unary_limit(), trainer.model.secondary_parser, args)
         model = model.to(args['device'])
         model.copy_with_new_structure(trainer.model)
         optimizer = build_optimizer(args, model, False)
@@ -493,13 +510,20 @@ def build_trainer(args, train_trees, dev_trees, silver_trees, foundation_cache, 
         temp_args['pattn_num_layers'] = 0
         temp_args['lattn_d_proj'] = 0
 
-        temp_model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, train_transitions, train_constituents, tags, words, rare_words, root_labels, open_nodes, unary_limit, temp_args)
+        secondary_parser = None
+        if args['secondary_model'] is not None:
+            secondary_parser = Trainer.load(temp_args['secondary_model'], Trainer.secondary_args(temp_args), load_optimizer=False, foundation_cache=foundation_cache)
+        temp_model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, train_transitions, train_constituents, tags, words, rare_words, root_labels, open_nodes, unary_limit, secondary_parser, temp_args)
         temp_model = temp_model.to(args['device'])
         temp_optim = build_optimizer(temp_args, temp_model, True)
         scheduler = build_scheduler(temp_args, temp_optim)
         trainer = Trainer(temp_model, temp_optim, scheduler)
     else:
-        model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, train_transitions, train_constituents, tags, words, rare_words, root_labels, open_nodes, unary_limit, args)
+        secondary_parser = None
+        if args['secondary_model'] is not None:
+            secondary_parser = Trainer.load(args['secondary_model'], Trainer.secondary_args(args), load_optimizer=False, foundation_cache=foundation_cache)
+            logger.info("Loaded secondary parser %s", args['secondary_model'])
+        model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, train_transitions, train_constituents, tags, words, rare_words, root_labels, open_nodes, unary_limit, secondary_parser, args)
         model = model.to(args['device'])
 
         optimizer = build_optimizer(args, model, False)
@@ -764,7 +788,7 @@ def iterate_training(args, trainer, train_trees, train_sequences, transitions, d
             forward_charlm = foundation_cache.load_charlm(args['charlm_forward_file'])
             backward_charlm = foundation_cache.load_charlm(args['charlm_backward_file'])
             bert_model, bert_tokenizer = foundation_cache.load_bert(args['bert_model'])
-            new_model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, model.transitions, model.constituents, model.tags, model.delta_words, model.rare_words, model.root_labels, model.constituent_opens, model.unary_limit(), temp_args)
+            new_model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, model.transitions, model.constituents, model.tags, model.delta_words, model.rare_words, model.root_labels, model.constituent_opens, model.unary_limit(), model.secondary_parser, temp_args)
             new_model.to(device)
             new_model.copy_with_new_structure(model)
 

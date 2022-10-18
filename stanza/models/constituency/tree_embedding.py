@@ -11,6 +11,7 @@ Can be done over an existing parse tree or unparsed text
 import torch
 import torch.nn as nn
 
+from stanza.models.constituency.parse_tree import Tree
 from stanza.models.constituency.trainer import Trainer
 
 class TreeEmbedding(nn.Module):
@@ -33,6 +34,7 @@ class TreeEmbedding(nn.Module):
         self.hidden_size = self.constituency_parser.hidden_size + self.constituency_parser.transition_hidden_size
         if self.config["all_words"]:
             self.hidden_size += self.constituency_parser.hidden_size * self.constituency_parser.num_tree_lstm_layers
+            self.register_parameter('word_zeros', torch.nn.Parameter(torch.zeros(self.constituency_parser.hidden_size * self.constituency_parser.num_tree_lstm_layers, requires_grad=True)))
         else:
             self.hidden_size += self.constituency_parser.hidden_size * self.constituency_parser.num_tree_lstm_layers * 2
 
@@ -50,18 +52,36 @@ class TreeEmbedding(nn.Module):
         #if self.config["batch_norm"]:
         #    self.input_norm = nn.BatchNorm1d(self.output_size)
 
+    def embed_tagged_words(self, inputs):
+        if len(inputs) > 0 and len(inputs[0]) > 0 and isinstance(inputs[0][0], Tree):
+            if any(not isinstance(x, Tree) for sentence in inputs for x in sentence):
+                raise ValueError("Expected homogonous inputs")
+            if any(not x.is_preterminal() for sentence in inputs for x in sentence):
+                raise ValueError("Expected all preterminals as inputs")
+            inputs = [[(x.children[0].label, x.label) for x in sentence] for sentence in inputs]
+
+        if self.config["backprop"]:
+            states = self.constituency_parser.analyze_tagged_words(inputs, keep_state=True, keep_constituents=True)
+        else:
+            with torch.no_grad():
+                states = self.constituency_parser.analyze_tagged_words(inputs, keep_state=True, keep_constituents=True)
+        return self.embed_states(states)
+
     def embed_trees(self, inputs):
         if self.config["backprop"]:
             states = self.constituency_parser.analyze_trees(inputs)
         else:
             with torch.no_grad():
                 states = self.constituency_parser.analyze_trees(inputs)
+        return self.embed_states(states)
 
+    def embed_states(self, states):
+        """
+        Returns either B lists of NxH tensors, or one Bx1xH tensor
+        """
         constituent_lists = [x.constituents for x in states]
         states = [x.state for x in states]
 
-        word_begin_hx = torch.stack([state.word_queue[0].hx for state in states])
-        word_end_hx = torch.stack([state.word_queue[state.word_position].hx for state in states])
         transition_hx = torch.stack([self.constituency_parser.transition_stack.output(state.transitions) for state in states])
         # go down one layer to get the embedding off the top of the S, not the ROOT
         # (in terms of the typical treebank)
@@ -75,9 +95,13 @@ class TreeEmbedding(nn.Module):
 
         if self.config["all_words"]:
             # need B matrices of N x hidden_size
-            key = [torch.stack([torch.cat([word.hx, thx, chx]) for word in state.word_queue], dim=0)
+            # the zeros is to represent being before the first word
+            # TODO: if the parser changes to keep the initial word boundary, no need to add the zeros
+            key = [torch.stack([torch.cat([self.word_zeros, thx, chx])] + [torch.cat([word.hx, thx, chx]) for word in state.word_queue], dim=0)
                    for state, thx, chx in zip(states, transition_hx, constituent_hx)]
         else:
+            word_begin_hx = torch.stack([state.word_queue[0].hx for state in states])
+            word_end_hx = torch.stack([state.word_queue[state.word_position].hx for state in states])
             key = torch.cat((word_begin_hx, word_end_hx, transition_hx, constituent_hx), dim=1).unsqueeze(1)
 
         if not self.config["node_attn"]:
@@ -94,6 +118,7 @@ class TreeEmbedding(nn.Module):
         return previous_layer
 
     def forward(self, inputs):
+        # TODO: multiplex trees or sentences
         return embed_trees(self, inputs)
 
     def get_norms(self):
