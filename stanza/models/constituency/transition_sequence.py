@@ -104,6 +104,13 @@ def build_treebank(trees, transition_scheme=TransitionScheme.TOP_DOWN_UNARY, kno
         known_tags = set()
     return [build_sequence(tree, transition_scheme, known_tags) for tree in trees]
 
+def convert_trees_to_sequences(trees, tree_type, transition_scheme, known_tags):
+    logger.info("Building {} transition sequences".format(tree_type))
+    if logger.getEffectiveLevel() <= logging.INFO:
+        trees = tqdm(trees)
+    sequences = build_treebank(trees, transition_scheme, known_tags)
+    return sequences
+
 def all_transitions(transition_lists):
     """
     Given a list of transition lists, combine them all into a list of unique transitions.
