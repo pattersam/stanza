@@ -760,7 +760,12 @@ class LSTMModel(BaseModel, nn.Module):
 
         if self.partitioned_transformer_module is not None:
             partitioned_embeddings = self.partitioned_transformer_module(None, sentence_outputs)
-            sentence_outputs = [x + self.pattn_scale * 0.1 * y[:x.shape[0], :] for x, y in zip(sentence_outputs, partitioned_embeddings)]
+            #sentence_norms = [torch.linalg.norm(x).item() for x in sentence_outputs]
+            #pattn_norms = [torch.linalg.norm(y[:x.shape[0], :]).item() for x, y in zip(sentence_outputs, partitioned_embeddings)]
+            sentence_outputs = [x + self.pattn_scale * 0.25 * y[:x.shape[0], :] for x, y in zip(sentence_outputs, partitioned_embeddings)]
+            #new_norms = [torch.linalg.norm(x).item() for x in sentence_outputs]
+            #for x, y, z in zip(sentence_norms, pattn_norms, new_norms):
+            #    print("%.4f %.4f %.4f" % (x, y, z))
 
         # Extract Labeled Representation
         if self.label_attention_module is not None:
