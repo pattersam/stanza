@@ -687,7 +687,7 @@ def iterate_training(args, trainer, train_trees, train_sequences, transitions, d
         multistage_splits = {}
         # if we're halfway, only do pattn.  save lattn for next time
         multistage_splits[args['epochs'] // 2] = (args['pattn_num_layers'], False)
-        if LSTMModel.uses_lattn(args):
+        if LSTMModel.args_uses_lattn(args):
             multistage_splits[args['epochs'] * 3 // 4] = (args['pattn_num_layers'], True)
 
     oracle = None

@@ -373,7 +373,7 @@ class LSTMModel(BaseModel, nn.Module):
         self.word_transform_size = self.hidden_size * 2
         self.partitioned_transformer_module = None
         self.pattn_d_model = 0
-        if LSTMModel.uses_pattn(self.args):
+        if self.uses_pattn():
             # Initializations of parameters for the Partitioned Attention
             # round off the size of the model so that it divides in half evenly
             self.pattn_d_model = self.args['pattn_d_model'] // 2 * 2
@@ -382,7 +382,7 @@ class LSTMModel(BaseModel, nn.Module):
             # experiments suggest having a bias does not help here
             self.partitioned_transformer_module = PartitionedTransformerModule(
                 self.args['pattn_num_layers'],
-                d_model=self.pattn_d_model,
+                d_model=self.hidden_size * 2,
                 n_head=self.args['pattn_num_heads'],
                 d_qkv=self.args['pattn_d_kv'],
                 d_ff=self.args['pattn_d_ff'],
@@ -395,11 +395,10 @@ class LSTMModel(BaseModel, nn.Module):
                 timing=self.args['pattn_timing'],
                 encoder_max_len=self.args['pattn_encoder_max_len']
             )
-
-            self.word_transform_size += self.pattn_d_model
+            self.register_parameter('pattn_scale', torch.nn.Parameter(torch.randn(1, requires_grad=True)))
 
         self.label_attention_module = None
-        if LSTMModel.uses_lattn(self.args):
+        if self.uses_lattn():
             if self.partitioned_transformer_module is None and not self.args['lattn_combined_input']:
                 logger.warning("Switching to lattn_combined_input=True, as the partitioned transformer is not even active")
                 self.args['lattn_combined_input'] = True
@@ -558,12 +557,14 @@ class LSTMModel(BaseModel, nn.Module):
         self.output_layers = self.build_output_layers(self.args['num_output_layers'], len(transitions), self.maxout_k)
 
     @staticmethod
-    def uses_lattn(args):
+    def args_uses_lattn(args):
         return args.get('use_lattn', True) and args.get('lattn_d_proj', 0) > 0 and args.get('lattn_d_l', 0) > 0
 
-    @staticmethod
-    def uses_pattn(args):
-        return args['pattn_num_heads'] > 0 and args['pattn_num_layers'] > 0
+    def uses_lattn(self):
+        return self.args_uses_lattn(self.args)
+
+    def uses_pattn(self):
+        return self.args['pattn_num_heads'] > 0 and self.args['pattn_num_layers'] > 0
 
     def copy_with_new_structure(self, other):
         """
@@ -599,6 +600,8 @@ class LSTMModel(BaseModel, nn.Module):
                 my_parameter.data.copy_(new_values)
             else:
                 self.get_parameter(name).data.copy_(other_parameter.data)
+        if self.uses_pattn() and not other.uses_pattn():
+            nn.init.zeros_(self.pattn_scale.data)
 
     def build_output_layers(self, num_output_layers, final_layer_size, maxout_k):
         """
@@ -757,7 +760,7 @@ class LSTMModel(BaseModel, nn.Module):
 
         if self.partitioned_transformer_module is not None:
             partitioned_embeddings = self.partitioned_transformer_module(None, sentence_outputs)
-            sentence_outputs = [torch.cat((x, y[:x.shape[0], :]), axis=1) for x, y in zip(sentence_outputs, partitioned_embeddings)]
+            sentence_outputs = [x + self.pattn_scale * 0.1 * y[:x.shape[0], :] for x, y in zip(sentence_outputs, partitioned_embeddings)]
 
         # Extract Labeled Representation
         if self.label_attention_module is not None:
