@@ -14,10 +14,14 @@ from .vocab import Vocab
 logger = logging.getLogger('stanza')
 
 class Trainer(BaseTrainer):
-    def __init__(self, args=None, vocab=None, lexicon=None, dictionary=None, model_file=None, device=None):
+    def __init__(self, args=None, vocab=None, lexicon=None, dictionary=None, model_file=None, device=None, foundation_cache=None):
+        # TODO: make a test of the training w/ and w/o charlm
+        # TODO: update the run_tokenizer script to easily support charlm
+        #   - needs to have the model filename built with charlm
+        # TODO: build the resources with the forward charlm
         if model_file is not None:
             # load everything from file
-            self.load(model_file)
+            self.load(model_file, args, foundation_cache)
         else:
             # build model from scratch
             self.args = args
@@ -33,14 +37,14 @@ class Trainer(BaseTrainer):
 
     def update(self, inputs):
         self.model.train()
-        units, labels, features, _ = inputs
+        units, labels, features, raw_units = inputs
 
         device = next(self.model.parameters()).device
         units = units.to(device)
         labels = labels.to(device)
         features = features.to(device)
 
-        pred = self.model(units, features)
+        pred = self.model(units, features, raw_units)
 
         self.optimizer.zero_grad()
         classes = pred.size(2)
@@ -54,19 +58,28 @@ class Trainer(BaseTrainer):
 
     def predict(self, inputs):
         self.model.eval()
-        units, _, features, _ = inputs
+        units, _, features, raw_units = inputs
 
         device = next(self.model.parameters()).device
         units = units.to(device)
         features = features.to(device)
 
-        pred = self.model(units, features)
+        pred = self.model(units, features, raw_units)
 
         return pred.data.cpu().numpy()
 
-    def save(self, filename):
+    def save(self, filename, skip_modules=True):
+        model_state = None
+        if self.model is not None:
+            model_state = self.model.state_dict()
+            # skip saving modules like the pretrained charlm
+            if skip_modules:
+                skipped = [k for k in model_state.keys() if k.split('.')[0] in self.model.unsaved_modules]
+                for k in skipped:
+                    del model_state[k]
+
         params = {
-            'model': self.model.state_dict() if self.model is not None else None,
+            'model': model_state,
             'vocab': self.vocab.state_dict(),
             'lexicon': self.lexicon,
             'config': self.args
@@ -77,19 +90,21 @@ class Trainer(BaseTrainer):
         except BaseException:
             logger.warning("Saving failed... continuing anyway.")
 
-    def load(self, filename):
+    def load(self, filename, args, foundation_cache):
         try:
             checkpoint = torch.load(filename, lambda storage, loc: storage)
         except BaseException:
             logger.error("Cannot load model from {}".format(filename))
             raise
         self.args = checkpoint['config']
+        if args is not None and args.get('charlm_forward_file', None) is not None:
+            self.args['charlm_forward_file'] = args['charlm_forward_file']
         if self.args.get('use_mwt', None) is None:
             # Default to True as many currently saved models
             # were built with mwt layers
             self.args['use_mwt'] = True
         self.model = Tokenizer(self.args, self.args['vocab_size'], self.args['emb_dim'], self.args['hidden_dim'], dropout=self.args['dropout'], feat_dropout=self.args['feat_dropout'])
-        self.model.load_state_dict(checkpoint['model'])
+        self.model.load_state_dict(checkpoint['model'], strict=False)
         self.vocab = Vocab.load_state_dict(checkpoint['vocab'])
         self.lexicon = checkpoint['lexicon']
 
