@@ -65,6 +65,7 @@ def resolve_peft_args(args, logger, check_bert_finetune=True):
 def build_peft_wrapper(bert_model, args, logger):
     # Hide import so that the peft dependency is optional
     from peft import LoraConfig, get_peft_model
+    from copy import deepcopy
     logger.debug("Creating lora adapter with rank %d and alpha %d", args['lora_rank'], args['lora_alpha'])
     peft_config = LoraConfig(inference_mode=False,
                              r=args['lora_rank'],
@@ -74,5 +75,7 @@ def build_peft_wrapper(bert_model, args, logger):
                              modules_to_save=args['lora_modules_to_save'],
                              bias="none")
 
-    bert_model = get_peft_model(bert_model, peft_config)
+    # we inject PEFT onto a *copy* of the model in order to preserve our Fondation cache
+    bert_model = get_peft_model(deepcopy(bert_model), peft_config)
     return bert_model
+

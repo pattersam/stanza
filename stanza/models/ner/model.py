@@ -82,7 +82,7 @@ class NERTagger(nn.Module):
                 # (for historic reasons)
                 self.bert_layer_mix = None
             # first we load the transformer model and possibly turn off its requires_grad parameters ...
-            if self.args.get('bert_finetune', False):
+            if self.args.get('bert_finetune', False) and not self.args.get('use_peft', False):
                 bert_model, bert_tokenizer = load_bert(self.args['bert_model'])
             else:
                 bert_model, bert_tokenizer = load_bert(self.args['bert_model'], foundation_cache)
