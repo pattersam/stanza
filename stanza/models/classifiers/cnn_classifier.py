@@ -17,6 +17,7 @@ from stanza.models.classifiers.utils import ExtraVectors, ModelType, build_outpu
 from stanza.models.common.bert_embedding import extract_bert_embeddings
 from stanza.models.common.data import get_long_tensor, sort_all
 from stanza.models.common.foundation_cache import load_bert
+from stanza.models.common.peft_config import build_peft_wrapper
 from stanza.models.common.vocab import PAD_ID, UNK_ID
 
 """
@@ -53,7 +54,7 @@ tlogger = logging.getLogger('stanza.classifiers.trainer')
 
 class CNNClassifier(BaseClassifier):
     def __init__(self, pretrain, extra_vocab, labels,
-                 charmodel_forward, charmodel_backward, elmo_model, bert_model, bert_tokenizer,
+                 charmodel_forward, charmodel_backward, elmo_model, bert_model, bert_tokenizer, force_bert_saved,
                  args):
         """
         pretrain is a pretrained word embedding.  should have .emb and .vocab
@@ -71,6 +72,12 @@ class CNNClassifier(BaseClassifier):
         """
         super(CNNClassifier, self).__init__()
         self.labels = labels
+        # existing models don't have the bert_finetune or use_peft arguments
+        bert_finetune = getattr(args, "bert_finetune", False)
+        use_peft = getattr(args, "use_peft", False)
+        force_bert_saved = force_bert_saved or bert_finetune
+        logger.debug("bert_finetune %s / force_bert_saved %s", bert_finetune, force_bert_saved)
+
         # we build a separate config out of the args so that we can easily save it in torch
         self.config = SimpleNamespace(filter_channels = args.filter_channels,
                                       filter_sizes = args.filter_sizes,
@@ -83,9 +90,21 @@ class CNNClassifier(BaseClassifier):
                                       extra_wordvec_max_norm = args.extra_wordvec_max_norm,
                                       char_lowercase = args.char_lowercase,
                                       charlm_projection = args.charlm_projection,
+                                      has_charlm_forward = charmodel_forward is not None,
+                                      has_charlm_backward = charmodel_backward is not None,
                                       use_elmo = args.use_elmo,
                                       elmo_projection = args.elmo_projection,
                                       bert_model = args.bert_model,
+                                      bert_finetune = bert_finetune,
+                                      force_bert_saved = force_bert_saved,
+
+                                      use_peft = use_peft,
+                                      lora_rank = getattr(args, 'lora_rank', None),
+                                      lora_alpha = getattr(args, 'lora_alpha', None),
+                                      lora_dropout = getattr(args, 'lora_dropout', None),
+                                      lora_modules_to_save = getattr(args, 'lora_modules_to_save', None),
+                                      lora_target_modules = getattr(args, 'lora_target_modules', None),
+
                                       bilstm = args.bilstm,
                                       bilstm_hidden_dim = args.bilstm_hidden_dim,
                                       maxpool_width = args.maxpool_width,
@@ -112,7 +131,15 @@ class CNNClassifier(BaseClassifier):
             if charmodel_backward.is_forward_lm:
                 raise ValueError("Got a forward charlm as a backward charlm!")
 
-        self.add_unsaved_module('bert_model', bert_model)
+        if self.config.use_peft:
+            bert_model = build_peft_wrapper(bert_model, vars(self.config), tlogger)
+            # we use a peft-specific pathway for saving peft weights
+            self.add_unsaved_module('bert_model', bert_model)
+            self.bert_model.train()
+        elif force_bert_saved:
+            self.bert_model = bert_model
+        else:
+            self.add_unsaved_module('bert_model', bert_model)
         self.add_unsaved_module('bert_tokenizer', bert_tokenizer)
 
         # The Pretrain has PAD and UNK already (indices 0 and 1), but we
@@ -249,6 +276,13 @@ class CNNClassifier(BaseClassifier):
         self.unsaved_modules += [name]
         setattr(self, name, module)
 
+        if module is not None and (name in ('forward_charlm', 'backward_charlm') or
+                                   (name == 'bert_model' and not self.config.use_peft)):
+            # if we are using peft, we should not save the transformer directly
+            # instead, the peft parameters only will be saved later
+            for _, parameter in module.named_parameters():
+                parameter.requires_grad = False
+
     def is_unsaved_module(self, name):
         return name.split('.')[0] in self.unsaved_modules
 
@@ -263,7 +297,7 @@ class CNNClassifier(BaseClassifier):
     def log_norms(self):
         lines = ["NORMS FOR MODEL PARAMTERS"]
         for name, param in self.named_parameters():
-            if param.requires_grad and name.split(".")[0] not in ('bert_model', 'forward_charlm', 'backward_charlm'):
+            if param.requires_grad and name.split(".")[0] not in ('forward_charlm', 'backward_charlm'):
                 lines.append("%s %.6g" % (name, torch.norm(param).item()))
         logger.info("\n".join(lines))
 
@@ -279,7 +313,7 @@ class CNNClassifier(BaseClassifier):
         return char_inputs
 
     def extract_bert_embeddings(self, inputs, max_phrase_len, begin_paddings, device):
-        bert_embeddings = extract_bert_embeddings(self.config.bert_model, self.bert_tokenizer, self.bert_model, inputs, device, keep_endpoints=False)
+        bert_embeddings = extract_bert_embeddings(self.config.bert_model, self.bert_tokenizer, self.bert_model, inputs, device, keep_endpoints=False, detach=not self.config.bert_finetune)
         bert_inputs = torch.zeros((len(inputs), max_phrase_len, bert_embeddings[0].shape[-1]), device=device)
         for idx, rep in enumerate(bert_embeddings):
             start = begin_paddings[idx]
@@ -476,6 +510,10 @@ class CNNClassifier(BaseClassifier):
             'labels':       self.labels,
             'extra_vocab':  self.extra_vocab,
         }
+        if self.config.use_peft:
+            # Hide import so that peft dependency is optional
+            from peft import get_peft_model_state_dict
+            params["bert_lora"] = get_peft_model_state_dict(self.bert_model)
         return params
 
     def preprocess_data(self, sentences):

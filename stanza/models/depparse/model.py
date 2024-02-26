@@ -12,13 +12,15 @@ from stanza.models.common.biaffine import DeepBiaffineScorer
 from stanza.models.common.foundation_cache import load_bert, load_charlm
 from stanza.models.common.hlstm import HighwayLSTM
 from stanza.models.common.dropout import WordDropout
+from stanza.models.common.peft_config import build_peft_wrapper
 from stanza.models.common.vocab import CompositeVocab
 from stanza.models.common.char_model import CharacterModel, CharacterLanguageModel
+from stanza.models.common import utils
 
 logger = logging.getLogger('stanza')
 
 class Parser(nn.Module):
-    def __init__(self, args, vocab, emb_matrix=None, share_hid=False, foundation_cache=None):
+    def __init__(self, args, vocab, emb_matrix=None, share_hid=False, foundation_cache=None, force_bert_saved=False):
         super().__init__()
 
         self.vocab = vocab
@@ -82,7 +84,14 @@ class Parser(nn.Module):
                 # an average of layers 2, 3, 4 will be used
                 # (for historic reasons)
                 self.bert_layer_mix = None
-            if self.args.get('bert_finetune', False):
+            if self.args.get('use_peft', False):
+                bert_model, bert_tokenizer = load_bert(self.args['bert_model'], foundation_cache)
+                bert_model = build_peft_wrapper(bert_model, self.args, logger)
+                # we use a peft-specific pathway for saving peft weights
+                add_unsaved_module('bert_model', bert_model)
+                add_unsaved_module('bert_tokenizer', bert_tokenizer)
+                self.bert_model.train()
+            elif self.args.get('bert_finetune', False) or force_bert_saved:
                 bert_model, bert_tokenizer = load_bert(self.args['bert_model'])
                 self.bert_model = bert_model
                 add_unsaved_module('bert_tokenizer', bert_tokenizer)
@@ -123,7 +132,10 @@ class Parser(nn.Module):
         self.drop = nn.Dropout(args['dropout'])
         self.worddrop = WordDropout(args['word_dropout'])
 
-    def forward(self, word, word_mask, wordchars, wordchars_mask, upos, xpos, ufeats, pretrained, lemma, head, deprel, word_orig_idx, sentlens, wordlens, text):
+    def log_norms(self):
+        utils.log_norms(self)
+
+    def forward(self, word, word_mask, wordchars, wordchars_mask, upos, xpos, ufeats, pretrained, lemma, head, deprel, word_orig_idx, sentlens, wordlens, text, detach=True):
         def pack(x):
             return pack_padded_sequence(x, sentlens, batch_first=True)
 
@@ -177,9 +189,10 @@ class Parser(nn.Module):
 
         if self.bert_model is not None:
             device = next(self.parameters()).device
+            detach = detach or not self.args.get('bert_finetune', False) or not self.training
             processed_bert = extract_bert_embeddings(self.args['bert_model'], self.bert_tokenizer, self.bert_model, text, device, keep_endpoints=True,
                                                      num_layers=self.bert_layer_mix.in_features if self.bert_layer_mix is not None else None,
-                                                     detach=not self.args.get('bert_finetune', False))
+                                                     detach=detach)
             if self.bert_layer_mix is not None:
                 # add the average so that the default behavior is to
                 # take an average of the N layers, and anything else

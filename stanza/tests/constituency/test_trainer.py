@@ -175,7 +175,7 @@ class TestTrainer:
         # let's not make the model huge...
         args = ['--pattn_num_layers', '0', '--pattn_d_model', '128', '--lattn_d_proj', '0', '--use_lattn', '--hidden_size', '20', '--delta_embedding_dim', '10',
                 '--wordvec_pretrain_file', wordvec_pretrain_file, '--data_dir', tmpdirname,
-                '--save_dir', tmpdirname, '--save_name', 'test.pt', '--save_each_name', os.path.join(tmpdirname, 'each_%02d.pt'),
+                '--save_dir', tmpdirname, '--save_name', 'test.pt', '--save_each_start', '0', '--save_each_name', os.path.join(tmpdirname, 'each_%02d.pt'),
                 '--train_file', train_treebank_file, '--eval_file', eval_treebank_file,
                 '--epoch_size', '6', '--train_batch_size', '3',
                 '--shorthand', 'en_test']
@@ -205,7 +205,7 @@ class TestTrainer:
         if not exists_ok:
             assert not os.path.exists(args['save_name'])
         retag_pipeline = Pipeline(lang="en", processors="tokenize, pos", tokenize_pretokenized=True, dir=TEST_MODELS_DIR, foundation_cache=foundation_cache)
-        trained_model = trainer.train(args, None, each_name, [retag_pipeline])
+        trained_model = trainer.train(args, None, [retag_pipeline])
         # check that hooks are in the model if expected
         for p in trained_model.model.parameters():
             if p.requires_grad:
@@ -579,3 +579,30 @@ class TestTrainer:
     def test_xlnet_finetune_one_layer(self, wordvec_pretrain_file, tiny_random_xlnet):
         self.one_layer_finetune_transformer_test(wordvec_pretrain_file, tiny_random_xlnet)
 
+    def test_peft_finetune(self, wordvec_pretrain_file):
+        with tempfile.TemporaryDirectory(dir=TEST_WORKING_DIR) as tmpdirname:
+            transformer_name = 'hf-internal-testing/tiny-bert'
+            args = ['--bert_model', transformer_name, '--bert_finetune', '--optim', 'adamw', '--use_peft']
+            args, trained_model = self.run_train_test(wordvec_pretrain_file, tmpdirname, extra_args=args)
+
+    def test_peft_twostage_finetune(self, wordvec_pretrain_file):
+        with tempfile.TemporaryDirectory(dir=TEST_WORKING_DIR) as tmpdirname:
+            num_epochs = 6
+            transformer_name = 'hf-internal-testing/tiny-bert'
+            args = ['--bert_model', transformer_name, '--stage1_bert_finetune', '--optim', 'adamw', '--use_peft']
+            args, trained_model = self.run_train_test(wordvec_pretrain_file, tmpdirname, num_epochs=num_epochs, extra_args=args)
+            for epoch in range(num_epochs):
+                filename_prev = args['save_each_name'] % epoch
+                filename_next = args['save_each_name'] % (epoch+1)
+                trainer_prev = trainer.Trainer.load(filename_prev, args=args, load_optimizer=False)
+                trainer_next = trainer.Trainer.load(filename_next, args=args, load_optimizer=False)
+
+                lora_names = [name for name, _ in trainer_prev.model.bert_model.named_parameters() if name.find("lora") >= 0]
+                if epoch < 2:
+                    assert not any(torch.allclose(trainer_prev.model.bert_model.get_parameter(name).cpu(),
+                                                  trainer_next.model.bert_model.get_parameter(name).cpu())
+                                   for name in lora_names)
+                elif epoch > 2:
+                    assert all(torch.allclose(trainer_prev.model.bert_model.get_parameter(name).cpu(),
+                                              trainer_next.model.bert_model.get_parameter(name).cpu())
+                               for name in lora_names)

@@ -38,6 +38,7 @@ from torch.nn.utils.rnn import pack_padded_sequence
 
 from stanza.models.common.bert_embedding import extract_bert_embeddings
 from stanza.models.common.maxout_linear import MaxoutLinear
+from stanza.models.common.peft_config import build_peft_wrapper
 from stanza.models.common.utils import unsort
 from stanza.models.common.vocab import PAD_ID, UNK_ID
 from stanza.models.constituency.base_model import BaseModel
@@ -52,6 +53,7 @@ from stanza.models.constituency.tree_stack import TreeStack
 from stanza.models.constituency.utils import build_nonlinearity, initialize_linear
 
 logger = logging.getLogger('stanza')
+tlogger = logging.getLogger('stanza.constituency.trainer')
 
 WordNode = namedtuple("WordNode", ['value', 'hx'])
 
@@ -221,7 +223,7 @@ class LSTMModel(BaseModel, nn.Module):
           note that there will be an attempt made to learn UNK words as well,
           and tags by themselves may help UNK words
         rare_words: a list of rare words, used to occasionally replace with UNK
-        root_labels: probably ROOT, although apparently some treebanks like TOP
+        root_labels: probably ROOT, although apparently some treebanks like TOP or even s
         constituent_opens: a list of all possible open nodes which will go on the stack
           - this might be different from constituents if there are nodes
             which represent multiple constituents at once
@@ -233,7 +235,7 @@ class LSTMModel(BaseModel, nn.Module):
         However, that would only work at train time.  At eval or
         pipeline time we will load the lists from the saved model.
         """
-        super().__init__(transition_scheme=args['transition_scheme'], unary_limit=unary_limit, reverse_sentence=args.get('reversed', False))
+        super().__init__(transition_scheme=args['transition_scheme'], unary_limit=unary_limit, reverse_sentence=args.get('reversed', False), root_labels=root_labels)
 
         self.args = args
         self.unsaved_modules = []
@@ -249,7 +251,6 @@ class LSTMModel(BaseModel, nn.Module):
         self.vocab_size = emb_matrix.shape[0]
         self.embedding_dim = emb_matrix.shape[1]
 
-        self.root_labels = sorted(list(root_labels))
         self.constituents = sorted(list(constituents))
 
         self.hidden_size = self.args['hidden_size']
@@ -352,10 +353,19 @@ class LSTMModel(BaseModel, nn.Module):
         # so that we can use the charlm endpoint values rather than
         # try to train our own
         self.force_bert_saved = force_bert_saved
-        if self.args['bert_finetune'] or self.args['stage1_bert_finetune'] or force_bert_saved:
-            self.bert_model = bert_model
-        else:
+        if self.args.get('use_peft', False):
+            bert_model = build_peft_wrapper(bert_model, self.args, tlogger)
+            # we use a peft-specific pathway for saving peft weights
             self.add_unsaved_module('bert_model', bert_model)
+            self.bert_model.train()
+        elif self.args['bert_finetune'] or self.args['stage1_bert_finetune'] or force_bert_saved:
+            self.bert_model = bert_model
+        elif bert_model is not None:
+            self.add_unsaved_module('bert_model', bert_model)
+            for _, parameter in bert_model.named_parameters():
+                parameter.requires_grad = False
+        else:
+            self.bert_model = None
         self.add_unsaved_module('bert_tokenizer', bert_tokenizer)
         if bert_model is not None:
             if bert_tokenizer is None:
@@ -649,15 +659,12 @@ class LSTMModel(BaseModel, nn.Module):
         """
         self.unsaved_modules += [name]
         setattr(self, name, module)
-        if module is not None and name in ('bert_model', 'forward_charlm', 'backward_charlm'):
+        if module is not None and name in ('forward_charlm', 'backward_charlm'):
             for _, parameter in module.named_parameters():
                 parameter.requires_grad = False
 
     def is_unsaved_module(self, name):
         return name.split('.')[0] in self.unsaved_modules
-
-    def get_root_labels(self):
-        return self.root_labels
 
     def get_norms(self):
         lines = []

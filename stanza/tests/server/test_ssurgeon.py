@@ -294,11 +294,11 @@ def test_ssurgeon_blank_values():
 CANTONESE_MISC_WORDS_INPUT = """
 # sent_id = 1
 # text = 你喺度搵乜嘢呀？
-1	你	你	PRON	_	_	3	nsubj	_	SpaceAfter=No|Translit=nei5|Gloss=2SG
-2	喺度	喺度	ADV	_	_	3	advmod	_	SpaceAfter=No|Translit=hai2dou6|Gloss=PROG
+1	你	你	PRON	_	_	3	nsubj	_	Translit=nei5|Gloss=2SG|SpaceAfter=No
+2	喺度	喺度	ADV	_	_	3	advmod	_	Translit=hai2dou6|Gloss=PROG|SpaceAfter=No
 3	搵	搵	VERB	_	_	0	root	_	Translit=wan2|Gloss=find|SpaceAfter=No
-4	乜嘢	乜嘢	PRON	_	_	3	obj	_	SpaceAfter=No|Translit=mat1je5|Gloss=what
-5	呀	呀	PART	_	_	3	discourse:sp	_	SpaceAfter=No|Translit=aa3|Gloss=SFP
+4	乜嘢	乜嘢	PRON	_	_	3	obj	_	Translit=mat1je5|Gloss=what|SpaceAfter=No
+5	呀	呀	PART	_	_	3	discourse:sp	_	Translit=aa3|Gloss=SFP|SpaceAfter=No
 6	？	？	PUNCT	_	_	3	punct	_	SpaceAfter=No
 
 # sent_id = 2
@@ -358,7 +358,7 @@ ITALIAN_MWT_MISC_INPUT = """
 3-4	farepace	_	_	_	_	_	_	_	Players=GonnaPlay|SpaceAfter=No
 3	fare	fare	VERB	V	VerbForm=Inf	0	root	_	_
 4	pace	pace	NOUN	S	Gender=Fem|Number=Sing	3	obj	_	_
-5-6	col	_	_	_	_	_	_	_	SpaceAfter=No|Haters=GonnaHate
+5-6	col	_	_	_	_	_	_	_	Haters=GonnaHate|SpaceAfter=No
 5	con	con	ADP	E	_	7	case	_	_
 6	il	il	DET	RD	Definite=Def|Gender=Masc|Number=Sing|PronType=Art	7	det	_	_
 7	cervello	cervello	NOUN	S	Gender=Masc|Number=Sing	3	obl	_	RandomFeature=foo
@@ -371,6 +371,5 @@ def test_ssurgeon_mwt_misc():
     the RandomFeature=foo is on account of a silly bug in the initial
     version of passing in MWT misc features
     """
-    # currently commented out because the public version of CoreNLP doesn't support it
-    #check_empty_test(ITALIAN_MWT_MISC_INPUT)
+    check_empty_test(ITALIAN_MWT_MISC_INPUT)
 
