@@ -433,7 +433,17 @@ class LSTMModel(BaseModel, nn.Module):
         self.rel_attn = None
         if self.args.get('use_rattn', False):
             if self.word_input_size % self.args['rattn_heads'] != 0:
-                raise ValueError("Number of heads %d does not divide evenly into input size %d" % (self.args['rattn_heads'], self.word_input_size))
+                for rattn_heads in range(self.args['rattn_heads'] // 2):
+                    if self.word_input_size % (self.args['rattn_heads'] + rattn_heads) == 0:
+                        new_rattn_heads = self.args['rattn_heads'] + rattn_heads
+                        break
+                    if self.word_input_size % (self.args['rattn_heads'] - rattn_heads) == 0:
+                        new_rattn_heads = self.args['rattn_heads'] - rattn_heads
+                        break
+                else:
+                    raise ValueError("Number of heads %d does not divide evenly into input size %d" % (self.args['rattn_heads'], self.word_input_size))
+                logger.warning("rattn_heads of %d does not work, but found a similar value of %d which does work", self.args['rattn_heads'], new_rattn_heads)
+                self.args['rattn_heads'] = new_rattn_heads
 
             self.rel_attn = RelativeAttention(self.word_input_size, self.args['rattn_heads'], window=self.args['rattn_window'])
 
