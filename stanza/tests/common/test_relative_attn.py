@@ -13,6 +13,8 @@ def test_attn():
     result = foo(bar)
     assert result.shape == bar.shape
     value = foo.value(bar)
+    if not torch.allclose(result[:, -1, :], value[:, -1, :], atol=1e-07):
+        raise ValueError(result[:, -1, :] - value[:, -1, :])
     assert torch.allclose(result[:, -1, :], value[:, -1, :], atol=1e-07)
     assert not torch.allclose(result[:, 0, :], value[:, 0, :])
 
@@ -25,6 +27,8 @@ def test_shorter_sequence():
     assert result.shape == bar.shape
 
     value = foo.value(bar)
+    if not torch.allclose(result[:, -1, :], value[:, -1, :], atol=1e-07):
+        raise ValueError(result[:, -1, :] - value[:, -1, :])
     assert torch.allclose(result[:, -1, :], value[:, -1, :], atol=1e-07)
     assert not torch.allclose(result[:, 0, :], value[:, 0, :])
 
@@ -34,6 +38,8 @@ def test_reverse():
     result = foo(bar)
     assert result.shape == bar.shape
     value = foo.value(bar)
+    if not torch.allclose(result[:, 0, :], value[:, 0, :], atol=1e-07):
+        raise ValueError(result[:, 0, :] - value[:, 0, :])
     assert torch.allclose(result[:, 0, :], value[:, 0, :], atol=1e-07)
     assert not torch.allclose(result[:, -1, :], value[:, -1, :])
 
