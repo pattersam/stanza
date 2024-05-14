@@ -445,7 +445,8 @@ class LSTMModel(BaseModel, nn.Module):
                 logger.warning("rattn_heads of %d does not work, but found a similar value of %d which does work", self.args['rattn_heads'], new_rattn_heads)
                 self.args['rattn_heads'] = new_rattn_heads
 
-            self.rel_attn = RelativeAttention(self.word_input_size, self.args['rattn_heads'], window=self.args['rattn_window'])
+            self.rel_attn_forward = RelativeAttention(self.word_input_size, self.args['rattn_heads'], window=self.args['rattn_window'])
+            self.rel_attn_reverse = RelativeAttention(self.word_input_size, self.args['rattn_heads'], window=self.args['rattn_window'], reverse=True)
 
         self.word_lstm = nn.LSTM(input_size=self.word_input_size, hidden_size=self.hidden_size, num_layers=self.num_lstm_layers, bidirectional=True, dropout=self.lstm_layer_dropout)
 
@@ -803,7 +804,10 @@ class LSTMModel(BaseModel, nn.Module):
             all_word_inputs = [torch.cat((x, y[:x.shape[0], :]), axis=1) for x, y in zip(all_word_inputs, labeled_representations)]
 
         if self.rel_attn is not None:
-            all_word_inputs = [x + self.rel_attn(x.unsqueeze(0)).squeeze(0) for x in all_word_inputs]
+            all_word_inputs = [x +
+                               self.rel_attn_forward(x.unsqueeze(0)).squeeze(0) +
+                               self.rel_attn_reverse(x.unsqueeze(0)).squeeze(0)
+                               for x in all_word_inputs]
 
         all_word_inputs = [self.word_dropout(word_inputs) for word_inputs in all_word_inputs]
         packed_word_input = torch.nn.utils.rnn.pack_sequence(all_word_inputs, enforce_sorted=False)
