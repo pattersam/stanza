@@ -21,7 +21,7 @@ tqdm = get_tqdm()
 IS_UDCOREF_FORMAT = True
 UDCOREF_ADDN = 0 if not IS_UDCOREF_FORMAT else 1
 
-def process_documents(docs, augment=False):
+def process_documents(docs, augment=False, use_cconj_heads=True):
     processed_section = []
 
     for idx, (doc, doc_id, lang) in enumerate(tqdm(docs)):
@@ -120,7 +120,9 @@ def process_documents(docs, augment=False):
                 # whereas the OntoNotes coref_span is [start_word, end_word] inclusive
                 span_start = span[1] + word_total
                 span_end = span[2] + word_total + 1
-                candidate_head = find_cconj_head(sentence_heads, sentence_upos, span[1], span[2]+1)
+                candidate_head = (find_cconj_head(sentence_heads, sentence_upos, span[1], span[2]+1)
+                                  if use_cconj_heads
+                                  else None)
                 if candidate_head is None:
                     for candidate_head in range(span[1], span[2] + 1):
                         # stanza uses 0 to mark the head, whereas OntoNotes is counting
@@ -160,7 +162,9 @@ def process_documents(docs, augment=False):
         processed_section.append(processed)
     return processed_section
 
-def process_dataset(short_name, coref_output_path, split_test, train_files, dev_files):
+def process_dataset(short_name, coref_output_path,
+                    split_test, train_files, dev_files,
+                    use_cconj_heads=True):
     section_names = ('train', 'dev')
     section_filenames = [train_files, dev_files]
     sections = []
@@ -208,7 +212,7 @@ def process_dataset(short_name, coref_output_path, split_test, train_files, dev_
 
 
     for section_data, section_name in zip(sections, section_names):
-        converted_section = process_documents(section_data, augment=(section_name=="train"))
+        converted_section = process_documents(section_data, augment=(section_name=="train"), use_cconj_heads=use_cconj_heads)
 
         os.makedirs(coref_output_path, exist_ok=True)
         output_filename = os.path.join(coref_output_path, "%s.%s.json" % (short_name, section_name))
@@ -232,6 +236,7 @@ def main():
         prog='Convert UDCoref Data',
     )
     parser.add_argument('--split_test', default=None, type=float, help='How much of the data to randomly split from train to make a test set')
+    parser.add_argument('--wl_only', action="store_true", help="Use old-style WL-Coref without conjuction awareness")
 
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--directory', type=str, help="the name of the subfolder for data conversion")
@@ -255,7 +260,8 @@ def main():
         conll_path = os.path.join(coref_input_path, project)
         train_filenames = sorted(glob.glob(os.path.join(conll_path, f"*train.conllu")))
         dev_filenames = sorted(glob.glob(os.path.join(conll_path, f"*dev.conllu")))
-    process_dataset(project, coref_output_path, args.split_test, train_filenames, dev_filenames)
+    process_dataset(project, coref_output_path, args.split_test, train_filenames, dev_filenames,
+                    use_cconj_heads=(not args.wl_only))
 
 if __name__ == '__main__':
     main()
