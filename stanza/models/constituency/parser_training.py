@@ -34,15 +34,16 @@ tlogger = logging.getLogger('stanza.constituency.trainer')
 
 TrainItem = namedtuple("TrainItem", ['tree', 'gold_sequence', 'preterminals'])
 
-class EpochStats(namedtuple("EpochStats", ['epoch_loss', 'transitions_correct', 'transitions_incorrect', 'repairs_used', 'fake_transitions_used', 'nans'])):
+class EpochStats(namedtuple("EpochStats", ['epoch_loss', 'contrastive_loss', 'transitions_correct', 'transitions_incorrect', 'repairs_used', 'fake_transitions_used', 'nans'])):
     def __add__(self, other):
         transitions_correct = self.transitions_correct + other.transitions_correct
         transitions_incorrect = self.transitions_incorrect + other.transitions_incorrect
         repairs_used = self.repairs_used + other.repairs_used
         fake_transitions_used = self.fake_transitions_used + other.fake_transitions_used
         epoch_loss = self.epoch_loss + other.epoch_loss
+        contrastive_loss = self.contrastive_loss + other.contrastive_loss
         nans = self.nans + other.nans
-        return EpochStats(epoch_loss, transitions_correct, transitions_incorrect, repairs_used, fake_transitions_used, nans)
+        return EpochStats(epoch_loss, contrastive_loss, transitions_correct, transitions_incorrect, repairs_used, fake_transitions_used, nans)
 
 def evaluate(args, model_file, retag_pipeline):
     """
@@ -437,6 +438,12 @@ def iterate_training(args, trainer, train_trees, train_sequences, transitions, d
             "Transitions correct: %s" % epoch_stats.transitions_correct,
             "Transitions incorrect: %s" % epoch_stats.transitions_incorrect,
             "Total loss for epoch: %.5f" % epoch_stats.epoch_loss,
+        ]
+        if args['contrastive_learning_rate'] > 0.0:
+            stats_log_lines.extend([
+                "Contrastive loss for epoch: %.5f" % epoch_stats.contrastive_loss
+            ])
+        stats_log_lines.extend([
             "Dev score      (%5d): %8f" % (trainer.epochs_trained, f1),
             "Best dev score (%5d): %8f" % (trainer.best_epoch, trainer.best_f1)
         ]
@@ -532,7 +539,7 @@ def train_model_one_epoch(epoch, trainer, transition_tensors, process_outputs, m
 
     optimizer = trainer.optimizer
 
-    epoch_stats = EpochStats(0.0, Counter(), Counter(), Counter(), 0, 0)
+    epoch_stats = EpochStats(0.0, 0.0, Counter(), Counter(), Counter(), 0, 0)
 
     for batch_idx, interval_start in enumerate(tqdm(interval_starts, postfix="Epoch %d" % epoch)):
         batch = epoch_data[interval_start:interval_start+args['train_batch_size']]
@@ -702,12 +709,15 @@ def train_model_one_batch(epoch, batch_idx, model, training_batch, transition_te
             tlogger.info("  (none found!)")
     if torch.any(torch.isnan(tree_loss)):
         batch_loss = 0.0
+        contrastive_loss = 0.0
         nans = 1
     else:
         batch_loss = tree_loss.item()
+        if not isinstance(contrastive_loss, float):
+            contrastive_loss = contrastive_loss.item()
         nans = 0
 
-    return EpochStats(batch_loss, transitions_correct, transitions_incorrect, repairs_used, fake_transitions_used, nans)
+    return EpochStats(batch_loss, contrastive_loss, transitions_correct, transitions_incorrect, repairs_used, fake_transitions_used, nans)
 
 def run_dev_set(model, retagged_trees, original_trees, args, evaluator=None):
     """
