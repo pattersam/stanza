@@ -446,7 +446,7 @@ def iterate_training(args, trainer, train_trees, train_sequences, transitions, d
         stats_log_lines.extend([
             "Dev score      (%5d): %8f" % (trainer.epochs_trained, f1),
             "Best dev score (%5d): %8f" % (trainer.best_epoch, trainer.best_f1)
-        ]
+        ])
         tlogger.info("\n  ".join(stats_log_lines))
 
         old_lr = trainer.optimizer.param_groups[0]['lr']
